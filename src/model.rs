@@ -11,6 +11,34 @@ use crate::geom::{Color, Point, Rect};
 #[derive(Clone, Debug)]
 pub struct Document {
     pub pages: Vec<Page>,
+    /// Название из свойств PDF. Пустая строка — в EPUB будет «Книга».
+    pub title: String,
+    /// Язык из каталога PDF, например `ru` или `en`. Пустая строка — в EPUB будет `ru`.
+    pub language: String,
+    /// Оглавление PDF, если в файле есть закладки. Пустое — в книге останутся номера страниц.
+    pub outline: Vec<Heading>,
+    /// Шрифты книги. В EPUB это файлы в папке `fonts`, страница ссылается на них по имени.
+    pub faces: Vec<Face>,
+}
+
+/// Файл шрифта, который можно вложить в EPUB. `data` — OpenType или TrueType.
+#[derive(Clone, Debug)]
+pub struct Face {
+    pub family: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub data: Vec<u8>,
+}
+
+/// Пункт оглавления. `page` — номер страницы с нуля.
+/// `y` — расстояние от верхнего края листа до места, куда ведёт закладка.
+/// `None` значит «начало страницы». Дети — вложенные разделы.
+#[derive(Clone, Debug)]
+pub struct Heading {
+    pub title: String,
+    pub page: usize,
+    pub y: Option<f32>,
+    pub children: Vec<Heading>,
 }
 
 /// Одна страница.
@@ -88,6 +116,8 @@ pub struct Glyph {
     pub bounds: Rect,
     /// Начало базовой линии.
     pub origin: Point,
+    /// Поворот буквы в градусах, как в SVG. Ноль — обычная горизонтальная строка.
+    pub rotation: f32,
     pub ch: Option<char>,
     /// Код глифа во встроенном шрифте. У OCR его нет.
     pub glyph_id: Option<u32>,
@@ -113,6 +143,8 @@ pub struct PathShape {
     pub stroke_width: f32,
     pub stroke: Option<Color>,
     pub fill: Option<Color>,
+    /// true для заливки `f*` (even-odd). Для `f` поле равно false.
+    pub even_odd: bool,
     pub segments: Vec<PathSegment>,
 }
 
@@ -130,6 +162,9 @@ pub struct Table {
     pub bounds: Rect,
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
+    /// true, если в PDF была нарисована сетка. Таблица только из слов рамки в файле не имела,
+    /// поэтому при записи страницы клетки не обводятся.
+    pub ruled: bool,
 }
 
 #[derive(Clone, Debug)]
