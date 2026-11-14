@@ -1,0 +1,9 @@
+[package]
+name = "pdfcalque"
+version = "0.1.0"
+edition = "2021"
+description = "Parse a PDF into document structures that can be written as HTML"
+license = "MIT"
+
+[dependencies]
+lopdf = "0.36"
