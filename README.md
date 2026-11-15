@@ -1,6 +1,6 @@
 # PDFCalque
 
-PDFCalque reads a PDF into its own document model, then writes that model to other formats. The writers do not parse the PDF again. They only read pages, text, images, paths, tables, fonts, and the bookmark tree.
+Rust library that reads a PDF once, then writes HTML, a fixed-layout EPUB, CSV, and Excel from that model. The writers do not parse the file again. They only read pages, text, images, paths, tables, fonts, and the bookmark tree.
 
 A normal PDF is taken from the file: operators, fonts, and coordinates. A scan stays the picture already stored in the PDF. Letters are not recognized from that picture.
 
