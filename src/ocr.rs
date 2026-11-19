@@ -1,6 +1,6 @@
 //! Скан без букв в файле остаётся картинкой.
-//! Поверх неё кладётся невидимый текст: те же слова на тех же местах,
-//! чтобы их можно было выделить, не заменяя рисунок листа.
+//! Поверх неё кладётся невидимый текст: каждое слово — одна надпись
+//! на рамке чернил, чтобы его можно было выделить, не заменяя рисунок листа.
 
 use std::path::Path;
 use std::process::Command;
@@ -40,6 +40,8 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
     let (bytes, ext) = raster(image)?;
     let path = std::env::temp_dir().join(format!("pdfcalque-{}-{}.{}", std::process::id(), image.pixel_width, ext));
     std::fs::write(&path, bytes).ok()?;
+    // TSV, уровень 5: одно слово и его рамка. Рамки отдельных букв
+    // не совпадают с штрихом, поэтому их не запрашиваем.
     let output = Command::new(tesseract_program())
         .arg(&path)
         .arg("stdout")
@@ -129,43 +131,29 @@ fn words_from_tsv(tsv: &str, image: &Image) -> Vec<Element> {
     out
 }
 
-/// Слово растягивается на свою рамку. Буквы делят эту ширину, чтобы выделение
-/// совпало с тем местом, где слово напечатано на картинке.
+/// Одна надпись на всю рамку слова. Буквы внутри не режутся,
+/// иначе при выделении между ними появляются щели.
 fn overlay_word(spot: &Spot, image: &Image, scale_x: f32, scale_y: f32) -> Element {
     let x = image.bounds.x + spot.left * scale_x;
     let width = spot.width * scale_x;
     let height = (spot.height * scale_y).max(1.0);
     let top = image.bounds.y + image.bounds.height - spot.top * scale_y;
     let bottom = top - height;
-    let chars: Vec<char> = spot.text.chars().collect();
-    let count = chars.len().max(1) as f32;
-    let step = width / count;
-    let mut glyphs = Vec::new();
-    for (index, ch) in chars.into_iter().enumerate() {
-        let origin_x = x + step * index as f32;
-        glyphs.push(Glyph {
-            bounds: Rect { x: origin_x, y: bottom, width: step, height },
-            origin: Point { x: origin_x, y: bottom + height * 0.2 },
-            rotation: 0.0,
-            ch: Some(ch),
-            glyph_id: None,
-        });
-    }
-    // Пробел после слова, иначе при выделении строки слова слипаются.
-    glyphs.push(Glyph {
-        bounds: Rect { x: x + width, y: bottom, width: step * 0.35, height },
-        origin: Point { x: x + width, y: bottom + height * 0.2 },
-        rotation: 0.0,
-        ch: Some(' '),
-        glyph_id: None,
-    });
     let bounds = Rect { x, y: bottom, width, height };
+    // Times ближе к печатному шрифту счёта, чем рубленый запасной.
+    let font = Font { name: Some("Times New Roman".into()), size: height * 0.8, bold: false, italic: false };
     let span = TextSpan {
         bounds,
-        text: format!("{} ", spot.text),
-        font: Font { name: None, size: height * 0.8, bold: false, italic: false },
+        text: spot.text.clone(),
+        font,
         color: Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-        glyphs,
+        glyphs: vec![Glyph {
+            bounds,
+            origin: Point { x, y: bottom + height * 0.2 },
+            rotation: 0.0,
+            ch: None,
+            glyph_id: None,
+        }],
     };
     Element::Text(TextBlock {
         bounds,

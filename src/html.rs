@@ -10,7 +10,7 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use std::io::Write;
 
-use crate::{Color, Document, Element, Font, Image, Page, PathSegment, PathShape, TextBlock};
+use crate::{Color, Document, Element, Font, Image, Page, PathSegment, PathShape, TextBlock, TextSource};
 
 /// Все страницы одним HTML-файлом. Каждая страница — свой SVG исходного размера.
 /// Для печати у листа есть разрыв страницы. EPUB потом сможет взять те же страницы по отдельности.
@@ -95,6 +95,12 @@ fn write_text(out: &mut String, text: &TextBlock, page_h: f32) {
     // заливка прозрачная, буквы можно выделить поверх картинки.
     for line in &text.lines {
         for span in &line.spans {
+            // Слово со скана — одна надпись на всю рамку. Отдельные буквы
+            // выделялись бы с дырками между ними.
+            if text.source == TextSource::Ocr {
+                write_ocr_word(out, span, page_h);
+                continue;
+            }
             let family = font_family(&span.font);
             let weight = if span.font.bold { "700" } else { "400" };
             let style = if span.font.italic { "italic" } else { "normal" };
@@ -122,6 +128,32 @@ fn write_text(out: &mut String, text: &TextBlock, page_h: f32) {
             }
         }
     }
+}
+
+/// Слово целиком, растянутое на рамку чернил. Буквы не разбиты на отдельные
+/// элементы, поэтому при выделении между ними нет щелей.
+fn write_ocr_word(out: &mut String, span: &crate::TextSpan, page_h: f32) {
+    let word = span.text.trim();
+    if word.is_empty() {
+        return;
+    }
+    let baseline = span.bounds.y + span.bounds.height * 0.2;
+    let y = page_h - baseline;
+    let family = font_family(&span.font);
+    out.push_str(&format!(
+        "<text x=\"{}\" y=\"{}\" font-size=\"{}\" font-family=\"{family}\" fill=\"transparent\" textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\">{}</text>",
+        num(span.bounds.x),
+        num(y),
+        num(span.font.size),
+        num(span.bounds.width),
+        escape(word)
+    ));
+    out.push_str(&format!(
+        "<text x=\"{}\" y=\"{}\" font-size=\"{}\" font-family=\"{family}\" fill=\"transparent\"> </text>",
+        num(span.bounds.x + span.bounds.width),
+        num(y),
+        num(span.font.size)
+    ));
 }
 
 fn write_path(out: &mut String, path: &PathShape, page_h: f32) {
