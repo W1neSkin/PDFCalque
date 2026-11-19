@@ -42,10 +42,11 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
     std::fs::write(&path, bytes).ok()?;
     let lang = ocr_lang();
     // Сначала обычный разбор. Его рамки уже совпадают с выделением, их не двигаем.
-    let primary = run_tsv(&path, &lang, "3");
+    let primary = run_tsv(&path, &lang, "3", None);
     // Над линейкой таблицы обычный разбор иногда теряет слово. Редкий проход
     // его находит. Добавляем только то, что не пересекает уже найденные рамки.
-    let sparse = run_tsv(&path, &lang, "11");
+    // Долгий проход обрываем: иначе на слабой машине конвертация не заканчивается.
+    let sparse = run_tsv(&path, &lang, "11", Some(std::time::Duration::from_secs(25)));
     let _ = std::fs::remove_file(&path);
     let primary = primary?;
     let mut words = words_from_tsv(&primary, image, 45.0);
@@ -55,14 +56,40 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
     (!words.is_empty()).then_some(words)
 }
 
-fn run_tsv(path: &Path, lang: &str, psm: &str) -> Option<String> {
-    let output = Command::new(tesseract_program())
+fn run_tsv(path: &Path, lang: &str, psm: &str, limit: Option<std::time::Duration>) -> Option<String> {
+    let mut child = Command::new(tesseract_program())
         .arg(path)
         .arg("stdout")
         .args(["--psm", psm, "-l", lang, "tsv"])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    let mut stdout = child.stdout.take()?;
+    let (send, recv) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        let _ = std::io::Read::read_to_string(&mut stdout, &mut out);
+        let _ = send.send(out);
+    });
+    let started = std::time::Instant::now();
+    loop {
+        match recv.try_recv() {
+            Ok(text) => {
+                let status = child.wait().ok()?;
+                return status.success().then_some(text);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => return None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                if limit.is_some_and(|limit| started.elapsed() > limit) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 fn raster(image: &Image) -> Option<(Vec<u8>, &'static str)> {
