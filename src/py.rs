@@ -1,4 +1,4 @@
-//! Модуль Python. Конвертер делает `import pdfcalque`, без отдельной программы.
+//! Модуль Python. Конвертер сначала разбирает PDF, потом пишет результат из этого разбора.
 
 use std::path::Path;
 
@@ -10,28 +10,36 @@ fn py_err(message: impl ToString) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(message.to_string())
 }
 
-fn load(path: &str) -> PyResult<crate::Document> {
-    let bytes = std::fs::read(path).map_err(py_err)?;
-    crate::parse_pdf(&bytes).map_err(py_err)
+/// Уже разобранный PDF. Повторно файл не читается.
+#[pyclass]
+struct Book {
+    doc: crate::Document,
 }
 
-/// Разобрать PDF и вернуть JSON-отчёт. EPUB не пишется.
-#[pyfunction]
-fn report(pdf_path: &str) -> PyResult<String> {
-    Ok(report_json(&load(pdf_path)?))
+#[pymethods]
+impl Book {
+    /// JSON: страницы, слова, картинки, таблицы.
+    fn report(&self) -> String {
+        report_json(&self.doc)
+    }
+
+    /// EPUB из уже разобранных страниц.
+    fn write_epub(&self, path: &str) -> PyResult<()> {
+        crate::write_epub(&self.doc, Path::new(path)).map_err(py_err)
+    }
 }
 
-/// Записать EPUB и вернуть тот же JSON-отчёт.
+/// Разобрать PDF библиотекой и вернуть документ.
 #[pyfunction]
-fn export_epub(pdf_path: &str, epub_path: &str) -> PyResult<String> {
-    let doc = load(pdf_path)?;
-    crate::write_epub(&doc, Path::new(epub_path)).map_err(py_err)?;
-    Ok(report_json(&doc))
+fn parse(pdf_path: &str) -> PyResult<Book> {
+    let bytes = std::fs::read(pdf_path).map_err(py_err)?;
+    let doc = crate::parse_pdf(&bytes).map_err(py_err)?;
+    Ok(Book { doc })
 }
 
 #[pymodule]
 fn pdfcalque(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(report, m)?)?;
-    m.add_function(wrap_pyfunction!(export_epub, m)?)?;
+    m.add_function(wrap_pyfunction!(parse, m)?)?;
+    m.add_class::<Book>()?;
     Ok(())
 }
