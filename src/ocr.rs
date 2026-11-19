@@ -40,56 +40,23 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
     let (bytes, ext) = raster(image)?;
     let path = std::env::temp_dir().join(format!("pdfcalque-{}-{}.{}", std::process::id(), image.pixel_width, ext));
     std::fs::write(&path, bytes).ok()?;
-    let lang = ocr_lang();
-    // Сначала обычный разбор. Его рамки уже совпадают с выделением, их не двигаем.
-    let primary = run_tsv(&path, &lang, "3", None);
-    // Над линейкой таблицы обычный разбор иногда теряет слово. Редкий проход
-    // его находит. Добавляем только то, что не пересекает уже найденные рамки.
-    // Долгий проход обрываем: иначе на слабой машине конвертация не заканчивается.
-    let sparse = run_tsv(&path, &lang, "11", Some(std::time::Duration::from_secs(25)));
-    let _ = std::fs::remove_file(&path);
-    let primary = primary?;
-    let mut words = words_from_tsv(&primary, image, 45.0);
-    if let Some(sparse) = sparse {
-        absorb_missing(&mut words, words_from_tsv(&sparse, image, 40.0));
-    }
-    (!words.is_empty()).then_some(words)
-}
-
-fn run_tsv(path: &Path, lang: &str, psm: &str, limit: Option<std::time::Duration>) -> Option<String> {
-    let mut child = Command::new(tesseract_program())
-        .arg(path)
+    // TSV, уровень 5: одно слово и его рамка. Рамки отдельных букв
+    // не совпадают с штрихом, поэтому их не запрашиваем.
+    let output = Command::new(tesseract_program())
+        .arg(&path)
         .arg("stdout")
-        .args(["--psm", psm, "-l", lang, "tsv"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .args(["--psm", "3", "-l"])
+        .arg(ocr_lang())
+        .arg("tsv")
+        .output()
         .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let (send, recv) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = String::new();
-        let _ = std::io::Read::read_to_string(&mut stdout, &mut out);
-        let _ = send.send(out);
-    });
-    let started = std::time::Instant::now();
-    loop {
-        match recv.try_recv() {
-            Ok(text) => {
-                let status = child.wait().ok()?;
-                return status.success().then_some(text);
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => return None,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                if limit.is_some_and(|limit| started.elapsed() > limit) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return None;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-        }
+    let _ = std::fs::remove_file(&path);
+    if !output.status.success() {
+        return None;
     }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let words = words_from_tsv(&text, image);
+    (!words.is_empty()).then_some(words)
 }
 
 fn raster(image: &Image) -> Option<(Vec<u8>, &'static str)> {
@@ -134,7 +101,7 @@ struct Spot {
     height: f32,
 }
 
-fn words_from_tsv(tsv: &str, image: &Image, min_conf: f32) -> Vec<Element> {
+fn words_from_tsv(tsv: &str, image: &Image) -> Vec<Element> {
     let scale_x = image.bounds.width / image.pixel_width as f32;
     let scale_y = image.bounds.height / image.pixel_height as f32;
     let mut out = Vec::new();
@@ -146,7 +113,7 @@ fn words_from_tsv(tsv: &str, image: &Image, min_conf: f32) -> Vec<Element> {
         let conf: f32 = cols[10].parse().unwrap_or(-1.0);
         let text = cols[11].trim();
         // Уровень 5 — одно слово. Мусор с низкой уверенностью не кладём на лист.
-        if conf < min_conf || text.is_empty() || !text.chars().any(|ch| ch.is_alphanumeric()) {
+        if conf < 45.0 || text.is_empty() || !text.chars().any(|ch| ch.is_alphanumeric()) {
             continue;
         }
         let spot = Spot {
@@ -162,50 +129,6 @@ fn words_from_tsv(tsv: &str, image: &Image, min_conf: f32) -> Vec<Element> {
         out.push(overlay_word(&spot, image, scale_x, scale_y));
     }
     out
-}
-
-/// Слова второго прохода. Рамку, которая уже есть, не заменяем и не сдвигаем.
-fn absorb_missing(words: &mut Vec<Element>, extra: Vec<Element>) {
-    for word in extra {
-        if overlaps_any(&word, words) {
-            continue;
-        }
-        let rank = reading_rank(&word);
-        let index = words.iter().position(|found| reading_rank(found) > rank).unwrap_or(words.len());
-        words.insert(index, word);
-    }
-}
-
-fn overlaps_any(extra: &Element, words: &[Element]) -> bool {
-    let Some(extra_box) = text_bounds(extra) else { return true };
-    words.iter().any(|word| {
-        text_bounds(word).map(|found| overlap_ratio(extra_box, found) > 0.3).unwrap_or(false)
-    })
-}
-
-fn overlap_ratio(a: Rect, b: Rect) -> f32 {
-    let ix = (a.x + a.width).min(b.x + b.width) - a.x.max(b.x);
-    let iy = (a.y + a.height).min(b.y + b.height) - a.y.max(b.y);
-    if ix <= 0.0 || iy <= 0.0 {
-        return 0.0;
-    }
-    let smaller = (a.width * a.height).min(b.width * b.height);
-    if smaller <= 0.0 { 0.0 } else { ix * iy / smaller }
-}
-
-fn text_bounds(element: &Element) -> Option<Rect> {
-    match element {
-        Element::Text(text) => Some(text.bounds),
-        _ => None,
-    }
-}
-
-/// Сверху вниз, слева направо. 12 пунктов — одна строка, чтобы дрожание
-/// базовой линии не переставляло уже найденные слова.
-fn reading_rank(element: &Element) -> (i32, i32) {
-    let Some(bounds) = text_bounds(element) else { return (i32::MAX, 0) };
-    let top = bounds.y + bounds.height;
-    (((-top) / 12.0).round() as i32, bounds.x.round() as i32)
 }
 
 /// Одна надпись на всю рамку слова. Буквы внутри не режутся,
@@ -238,43 +161,4 @@ fn overlay_word(spot: &Spot, image: &Image, scale_x: f32, scale_y: f32) -> Eleme
         visible: true,
         lines: vec![TextLine { bounds, spans: vec![span] }],
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sheet() -> Image {
-        Image {
-            bounds: Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-            pixel_width: 100,
-            pixel_height: 100,
-            filter: String::new(),
-            color_space: String::new(),
-            data: Vec::new(),
-        }
-    }
-
-    fn tsv(rows: &[&str]) -> String {
-        let mut out = String::from("level\tpage\tblock\tpar\tline\tword\tleft\ttop\twidth\theight\tconf\ttext\n");
-        out.push_str(&rows.join("\n"));
-        out
-    }
-
-    #[test]
-    fn missing_word_is_inserted_and_the_old_box_stays() {
-        let image = sheet();
-        let mut words = words_from_tsv(&tsv(&["5\t1\t1\t1\t1\t1\t10\t10\t20\t10\t90\tItem"]), &image, 45.0);
-        let item = text_bounds(&words[0]).unwrap();
-        let sparse = tsv(&[
-            "5\t1\t1\t1\t1\t1\t12\t10\t20\t10\t90\tItem",
-            "5\t1\t1\t1\t1\t2\t50\t10\t20\t10\t46\tTotal",
-            "5\t1\t1\t1\t1\t3\t80\t10\t10\t10\t10\tjunk",
-        ]);
-        absorb_missing(&mut words, words_from_tsv(&sparse, &image, 40.0));
-        assert_eq!(words.len(), 2);
-        assert_eq!(text_bounds(&words[0]).unwrap(), item);
-        let Element::Text(total) = &words[1] else { panic!("total") };
-        assert_eq!(total.lines[0].spans[0].text, "Total");
-    }
 }
