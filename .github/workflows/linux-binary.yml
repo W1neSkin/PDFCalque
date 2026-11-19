@@ -22,10 +22,10 @@ jobs:
         run: |
           pip install maturin
           maturin build --release --interpreter python3.12
-          cp target/wheels/pdfcalque-*.whl pdfcalque-cp312.whl
       - name: Publish the wheel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view python || gh release create python --title "Python package" --notes "import pdfcalque"
-          gh release upload python pdfcalque-cp312.whl --clobber
+          # pip rejects a renamed file. maturin already writes distribution-version-python-abi-platform.whl.
+          gh release upload python target/wheels/pdfcalque-*.whl --clobber
