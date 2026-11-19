@@ -15,6 +15,8 @@ mod otf;
 mod model;
 mod ocr;
 mod parse;
+mod py;
+mod report;
 mod xlsx;
 
 pub use csv::table_to_csv;
@@ -24,6 +26,7 @@ pub use html::{document_to_html, page_to_html, write_document, write_html};
 pub use ocr::maybe_scan as ocr_scan;
 pub use xlsx::table_to_xlsx;
 pub use parse::{parse_pdf, parse_pdf_page};
+pub use report::report_json;
 
 pub use model::{
     Cell, Column, Document, Element, Face, Font, Glyph, Heading, Image, Page, PathSegment, PathShape, Row,

@@ -1,4 +1,4 @@
-name: Linux binary
+name: Python wheel
 
 on:
   push:
@@ -10,18 +10,22 @@ permissions:
 
 jobs:
   build:
-    # Render's Python image is older than ubuntu-latest. A binary from
-    # the newest image needs a glibc the server does not have, so it
-    # never starts and the converter falls back to Poppler.
+    # Same system family as the Render Python service, so the module loads there.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build pdfcalque
-        run: cargo build --release --bin pdfcalque
-      - name: Publish the Linux program
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the Python module
+        run: |
+          pip install maturin
+          maturin build --release --interpreter python3.12
+          cp target/wheels/pdfcalque-*.whl pdfcalque-cp312.whl
+      - name: Publish the wheel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view linux || gh release create linux --title "Linux binary" --notes "Program used by the PDF converter."
-          gh release upload linux target/release/pdfcalque --clobber
+          gh release view python || gh release create python --title "Python package" --notes "import pdfcalque"
+          gh release upload python pdfcalque-cp312.whl --clobber
