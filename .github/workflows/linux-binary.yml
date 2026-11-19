@@ -10,7 +10,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Render's Python image is older than ubuntu-latest. A binary from
+    # the newest image needs a glibc the server does not have, so it
+    # never starts and the converter falls back to Poppler.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
