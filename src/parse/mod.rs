@@ -19,24 +19,25 @@ use crate::Document;
 
 /// Разобрать байты PDF. Текст берётся из команд файла, не из распознавания картинки.
 pub fn parse_pdf(data: &[u8]) -> Result<Document, String> {
-    parse_loaded(data, None)
+    parse_pdf_reporting(data, |_, _| {})
+}
+
+/// Как `parse_pdf`, но перед каждой страницей вызывает `on_page(текущая, всего)`.
+pub fn parse_pdf_reporting(data: &[u8], on_page: impl FnMut(u32, u32)) -> Result<Document, String> {
+    parse_loaded(data, None, on_page)
 }
 
 /// Одна страница, номер с единицы. Нужна, чтобы проверить скан, не разбирая всю книгу.
 pub fn parse_pdf_page(data: &[u8], page: u32) -> Result<Document, String> {
-    parse_loaded(data, Some(page))
+    parse_loaded(data, Some(page), |_, _| {})
 }
 
-fn parse_loaded(data: &[u8], only: Option<u32>) -> Result<Document, String> {
+fn parse_loaded(data: &[u8], only: Option<u32>, on_page: impl FnMut(u32, u32)) -> Result<Document, String> {
     let mut file = PdfFile::load_mem(data).map_err(|err| err.to_string())?;
     // В этих файлах указатель объектов внутри потока разделён нулевыми байтами.
     // Для PDF это пробел, а стандартный разбор так не считает и теряет каталог.
     recover_object_streams(&mut file);
-    let mut document = if let Some(page) = only {
-        page::parse_some(&file, Some(page))?
-    } else {
-        page::parse_file(&file)?
-    };
+    let mut document = page::parse_pages(&file, only, on_page)?;
     document.title = info_text(&file, b"Title");
     document.language = catalog_lang(&file);
     document.outline = outline::headings_from(&file);

@@ -30,10 +30,19 @@ impl Book {
 }
 
 /// Разобрать PDF библиотекой и вернуть документ.
+/// `progress(текущая, всего)` вызывается перед каждой страницей.
 #[pyfunction]
-fn parse(pdf_path: &str) -> PyResult<Book> {
+#[pyo3(signature = (pdf_path, progress=None))]
+fn parse(py: Python<'_>, pdf_path: &str, progress: Option<PyObject>) -> PyResult<Book> {
     let bytes = std::fs::read(pdf_path).map_err(py_err)?;
-    let doc = crate::parse_pdf(&bytes).map_err(py_err)?;
+    let doc = py.allow_threads(|| {
+        crate::parse::parse_pdf_reporting(&bytes, |current, total| {
+            let Some(callback) = &progress else { return };
+            Python::with_gil(|py| {
+                let _ = callback.call1(py, (current, total));
+            });
+        })
+    }).map_err(py_err)?;
     Ok(Book { doc })
 }
 

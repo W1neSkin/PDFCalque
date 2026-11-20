@@ -10,16 +10,22 @@ use super::exec;
 use super::font::{self, FontInfo};
 use super::group;
 
-pub fn parse_file(doc: &PdfFile) -> Result<Document, String> {
-    parse_some(doc, None)
-}
-
-pub(super) fn parse_some(doc: &PdfFile, only: Option<u32>) -> Result<Document, String> {
+pub(super) fn parse_pages(
+    doc: &PdfFile,
+    only: Option<u32>,
+    mut on_page: impl FnMut(u32, u32),
+) -> Result<Document, String> {
+    let found = doc.get_pages();
+    let total = if only.is_some() { 1 } else { found.len() as u32 };
     let mut pages = Vec::new();
-    for (number, id) in doc.get_pages() {
+    let mut seen = 0u32;
+    for (number, id) in found {
         if only.is_some_and(|want| want != number) {
             continue;
         }
+        seen += 1;
+        // До распознавания, чтобы снаружи было видно, какая страница сейчас читается.
+        on_page(seen, total.max(1));
         let (llx, lly, urx, ury) = page_box(doc, id);
         let levels = resource_levels(doc, id);
         let mut fonts = HashMap::<Vec<u8>, FontInfo>::new();
