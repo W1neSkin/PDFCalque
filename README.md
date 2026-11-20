@@ -2,7 +2,7 @@
 
 Rust library that reads a PDF once, then writes HTML, a fixed-layout EPUB, CSV, and Excel from that model. The writers do not parse the file again. They only read pages, text, images, paths, tables, fonts, and the bookmark tree.
 
-A normal PDF is taken from the file: operators, fonts, and coordinates. A scan stays the picture already stored in the PDF. Letters are not recognized from that picture.
+A normal PDF is taken from the file: operators, fonts, and coordinates. A scan stays the picture already stored in the PDF. If that page has no text and the picture covers most of the page, and the `tesseract` program is installed, PDFCalque asks Tesseract for word boxes and writes those words as an invisible selectable layer on top of the picture. The picture is not replaced. A word the first pass misses, usually because a rule sits under it, can be read later from the ink in the empty part of that same line. The overlay font is only a stand-in, so a letter edge can sit a fraction of a letter off the ink.
 
 ## What it writes
 
@@ -14,7 +14,7 @@ Text that is already in the PDF is positioned glyph by glyph. A ruled table is b
 
 ## What it does not do
 
-- It does not OCR a scan.
+- It does not OCR a page that already has text, and it does not OCR a small illustration.
 - It does not paint shadings or blend modes. A page that is mostly vector art can look plainer than a fresh render of the PDF.
 - It does not rebuild merged table cells. A header that crosses two columns is left out rather than stored as one wrong cell.
 
@@ -39,6 +39,22 @@ for page in &doc.pages {
 ```
 
 `parse_pdf_page` reads one page. Page numbers start at 1.
+
+`parse_pdf_reporting` is the same parse, and it calls you before each page with the current page and the page count. The Python module exposes that as `pdfcalque.parse(path, progress)`. `progress(current, total)` runs before the page is read. While a scan page is recognized, the library prints `pdfcalque ...` lines to stderr, including `tesseract psm 3 still reading 10s` every 10 seconds until that image finishes.
+
+## Python
+
+```python
+import pdfcalque
+
+def progress(current, total):
+    print(current, total)
+
+book = pdfcalque.parse("book.pdf", progress)
+book.write_epub("book.epub")
+```
+
+An older build of the module accepts only the path.
 
 The model keeps PDF coordinates: the origin is the bottom left of the page. HTML and EPUB flip that to the top left when they draw.
 

@@ -60,17 +60,11 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
     // не совпадают с штрихом, поэтому их не запрашиваем.
     log_step(format!("tesseract psm 3 start {}x{}", image.pixel_width, image.pixel_height));
     let started = std::time::Instant::now();
-    let output = Command::new(tesseract_program())
-        .arg(&path)
-        .arg("stdout")
-        .args(["--psm", "3", "-l"])
-        .arg(ocr_lang())
-        .arg("tsv")
-        .output();
-    log_step(format!("tesseract psm 3 returned {:.1}s", started.elapsed().as_secs_f32()));
+    let output = tesseract_tsv(&path, "3", None);
+    log_step(format!("tesseract psm 3 finished {:.0}s", started.elapsed().as_secs_f32()));
     let result = match output {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout);
+        Some(bytes) => {
+            let text = String::from_utf8_lossy(&bytes);
             let mut words = words_from_tsv(&text, image);
             log_step(format!("tesseract words {}", words.len()));
             // Линейка под заголовком иногда прячет одно слово. Ищем чернила в пустом
@@ -86,12 +80,8 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
             ));
             (!words.is_empty()).then_some(words)
         }
-        Ok(output) => {
-            log_step(format!("tesseract psm 3 failed status {}", output.status));
-            None
-        }
-        Err(err) => {
-            log_step(format!("tesseract psm 3 error {err}"));
+        None => {
+            log_step("tesseract psm 3 failed");
             None
         }
     };
@@ -388,7 +378,7 @@ fn read_gap(pixels: &[u8], width: usize, height: usize, gap: (i32, i32, i32, i32
     std::fs::write(&path, file).ok()?;
     log_step(format!("gap {index} tesseract psm 7 start {crop_w}x{crop_h}"));
     let started = std::time::Instant::now();
-    let output = tesseract_tsv(&path, "7");
+    let output = tesseract_tsv(&path, "7", Some(std::time::Duration::from_secs(8)));
     log_step(format!("gap {index} tesseract psm 7 returned {:.1}s", started.elapsed().as_secs_f32()));
     let _ = std::fs::remove_file(&path);
     let output = output?;
@@ -396,7 +386,7 @@ fn read_gap(pixels: &[u8], width: usize, height: usize, gap: (i32, i32, i32, i32
     best_spot(&text, x0, y0)
 }
 
-fn tesseract_tsv(path: &Path, psm: &str) -> Option<Vec<u8>> {
+fn tesseract_tsv(path: &Path, psm: &str, limit: Option<std::time::Duration>) -> Option<Vec<u8>> {
     let mut child = Command::new(tesseract_program())
         .arg(path)
         .arg("stdout")
@@ -415,7 +405,7 @@ fn tesseract_tsv(path: &Path, psm: &str) -> Option<Vec<u8>> {
         let _ = send.send(out);
     });
     let started = std::time::Instant::now();
-    let limit = std::time::Duration::from_secs(8);
+    let mut next_note = std::time::Duration::from_secs(10);
     loop {
         match recv.try_recv() {
             Ok(out) => {
@@ -424,13 +414,20 @@ fn tesseract_tsv(path: &Path, psm: &str) -> Option<Vec<u8>> {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => return None,
             Err(std::sync::mpsc::TryRecvError::Empty) => {
-                if started.elapsed() > limit {
-                    log_step("tesseract psm 7 timeout 8s");
+                if started.elapsed() >= next_note {
+                    log_step(format!(
+                        "tesseract psm {psm} still reading {:.0}s",
+                        started.elapsed().as_secs_f32()
+                    ));
+                    next_note += std::time::Duration::from_secs(10);
+                }
+                if limit.is_some_and(|limit| started.elapsed() > limit) {
+                    log_step(format!("tesseract psm {psm} timeout {:.0}s", limit.unwrap_or_default().as_secs_f32()));
                     let _ = child.kill();
                     let _ = child.wait();
                     return None;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(40));
+                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
     }
