@@ -2,20 +2,36 @@
 //! Поверх неё кладётся невидимый текст: каждое слово — одна надпись
 //! на рамке чернил, чтобы его можно было выделить, не заменяя рисунок листа.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
 use crate::html::raw_png;
 use crate::{Color, Element, Font, Glyph, Image, Point, Rect, TextBlock, TextLine, TextSource, TextSpan};
 
+pub(crate) fn log_step(message: impl std::fmt::Display) {
+    eprintln!("pdfcalque {message}");
+    let _ = std::io::stderr().flush();
+}
+
 /// Если на листе нет текста, а есть большая картинка, распознаёт слова
 /// и добавляет их прозрачным слоем. Картинка не удаляется.
 pub fn maybe_scan(elements: &mut Vec<Element>, page_w: f32, page_h: f32) {
     if page_w < 1.0 || page_h < 1.0 || has_text(elements) {
+        log_step("scan skipped, page already has text");
         return;
     }
-    let Some(image) = covering_image(elements, page_w, page_h).cloned() else { return };
-    let Some(words) = recognize(&image) else { return };
+    let Some(image) = covering_image(elements, page_w, page_h).cloned() else {
+        log_step("scan skipped, no full-page image");
+        return;
+    };
+    log_step(format!("scan image {}x{}", image.pixel_width, image.pixel_height));
+    let started = std::time::Instant::now();
+    let Some(words) = recognize(&image) else {
+        log_step(format!("scan failed {:.1}s", started.elapsed().as_secs_f32()));
+        return;
+    };
+    log_step(format!("scan done {:.1}s words {}", started.elapsed().as_secs_f32(), words.len()));
     elements.extend(words);
 }
 
@@ -42,6 +58,8 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
     std::fs::write(&path, bytes).ok()?;
     // TSV, уровень 5: одно слово и его рамка. Рамки отдельных букв
     // не совпадают с штрихом, поэтому их не запрашиваем.
+    log_step(format!("tesseract psm 3 start {}x{}", image.pixel_width, image.pixel_height));
+    let started = std::time::Instant::now();
     let output = Command::new(tesseract_program())
         .arg(&path)
         .arg("stdout")
@@ -49,17 +67,33 @@ fn recognize(image: &Image) -> Option<Vec<Element>> {
         .arg(ocr_lang())
         .arg("tsv")
         .output();
+    log_step(format!("tesseract psm 3 returned {:.1}s", started.elapsed().as_secs_f32()));
     let result = match output {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout);
             let mut words = words_from_tsv(&text, image);
+            log_step(format!("tesseract words {}", words.len()));
             // Линейка под заголовком иногда прячет одно слово. Ищем чернила в пустом
             // месте уже найденной строки и распознаём только этот кусок. Рамки,
             // которые первый проход уже поставил, не двигаем.
+            let gaps_started = std::time::Instant::now();
+            log_step("line gaps start");
             fill_line_gaps(&path, image, &mut words);
+            log_step(format!(
+                "line gaps done {:.1}s words {}",
+                gaps_started.elapsed().as_secs_f32(),
+                words.len()
+            ));
             (!words.is_empty()).then_some(words)
         }
-        _ => None,
+        Ok(output) => {
+            log_step(format!("tesseract psm 3 failed status {}", output.status));
+            None
+        }
+        Err(err) => {
+            log_step(format!("tesseract psm 3 error {err}"));
+            None
+        }
     };
     let _ = std::fs::remove_file(&path);
     result
@@ -352,7 +386,10 @@ fn read_gap(pixels: &[u8], width: usize, height: usize, gap: (i32, i32, i32, i32
     let mut file = format!("P5\n{crop_w} {crop_h}\n255\n").into_bytes();
     file.extend(body);
     std::fs::write(&path, file).ok()?;
+    log_step(format!("gap {index} tesseract psm 7 start {crop_w}x{crop_h}"));
+    let started = std::time::Instant::now();
     let output = tesseract_tsv(&path, "7");
+    log_step(format!("gap {index} tesseract psm 7 returned {:.1}s", started.elapsed().as_secs_f32()));
     let _ = std::fs::remove_file(&path);
     let output = output?;
     let text = String::from_utf8_lossy(&output);
@@ -388,6 +425,7 @@ fn tesseract_tsv(path: &Path, psm: &str) -> Option<Vec<u8>> {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => return None,
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 if started.elapsed() > limit {
+                    log_step("tesseract psm 7 timeout 8s");
                     let _ = child.kill();
                     let _ = child.wait();
                     return None;

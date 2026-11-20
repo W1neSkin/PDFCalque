@@ -26,6 +26,8 @@ pub(super) fn parse_pages(
         seen += 1;
         // До распознавания, чтобы снаружи было видно, какая страница сейчас читается.
         on_page(seen, total.max(1));
+        let started = std::time::Instant::now();
+        crate::ocr::log_step(format!("page {seen}/{} content start", total.max(1)));
         let (llx, lly, urx, ury) = page_box(doc, id);
         let levels = resource_levels(doc, id);
         let mut fonts = HashMap::<Vec<u8>, FontInfo>::new();
@@ -39,7 +41,17 @@ pub(super) fn parse_pages(
         shift(&mut elements, -llx, -lly);
         let width = (urx - llx).abs();
         let height = (ury - lly).abs();
+        crate::ocr::log_step(format!(
+            "page {seen}/{} content done {:.1}s",
+            total.max(1),
+            started.elapsed().as_secs_f32()
+        ));
         crate::ocr::maybe_scan(&mut elements, width, height);
+        crate::ocr::log_step(format!(
+            "page {seen}/{} done {:.1}s",
+            total.max(1),
+            started.elapsed().as_secs_f32()
+        ));
         pages.push(Page { width, height, elements });
     }
     Ok(Document { pages, title: String::new(), language: String::new(), outline: Vec::new(), faces: Vec::new() })
