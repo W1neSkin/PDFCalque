@@ -11,6 +11,7 @@ crate-type = ["lib", "cdylib"]
 [dependencies]
 fax = "0.3.0"
 flate2 = "1"
+jpeg-decoder = "0.3"
 lopdf = "0.36"
 pyo3 = { version = "0.23", features = ["extension-module"] }
 stet-fonts = "0.10"
